@@ -211,7 +211,10 @@ app
         cookie: {
           maxAge: 1000 * 60 * 60 * 24 * 30,
           httpOnly: true,
-          sameSite: settings.network.csrfProtection ? 'strict' : 'lax',
+          // OIDC returns from a different site. Lax still blocks cross-site
+          // subrequests while allowing the top-level authorization callback;
+          // state, nonce and PKCE bind that callback to this session.
+          sameSite: 'lax',
           secure: 'auto',
         },
         store: new TypeormStore({

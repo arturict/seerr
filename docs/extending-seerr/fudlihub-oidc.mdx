@@ -1,0 +1,46 @@
+# FudliHub Authentik OIDC fork
+
+This fork adds one hardened OpenID Connect login for the FudliHub deployment.
+It is intentionally not a generic multi-provider configuration screen.
+
+## Runtime contract
+
+The container requires these environment variables:
+
+```text
+OIDC_ISSUER=https://auth.fudligagg.ch/application/o/fudliseerr/
+OIDC_CLIENT_ID=<confidential client id>
+OIDC_CLIENT_SECRET=<confidential client secret>
+OIDC_REDIRECT_URI=https://fudliseerr.fudligagg.ch/api/v1/auth/oidc/callback
+OIDC_REQUIRED_GROUP=Jellyfin Users
+```
+
+The client secret belongs in a root-readable environment file and must never be
+committed. The Authentik provider must use Authorization Code, PKCE, an exact
+redirect URI, and signed ID tokens.
+
+## Identity rules
+
+- An immutable OIDC subject is stored after the first successful link.
+- The email claim must match exactly one existing Jellyfin-backed Seerr person.
+- Membership in `OIDC_REQUIRED_GROUP` is mandatory.
+- The protected Seerr owner (database user `1`) is never linked automatically.
+- A subject or Jellyfin-profile conflict fails closed instead of creating a
+  duplicate user.
+- Existing local/Jellyfin login remains available only as a migration fallback.
+
+## Release procedure
+
+1. Rebase or cherry-pick deliberately; upstream is not merged automatically.
+2. Run type checking, linting, the OIDC identity tests, and a production Docker
+   build with Node 22.
+3. Back up the Seerr database with SQLite's backup API or a PostgreSQL custom
+   dump and verify it before deployment.
+4. Tag the image with the exact Git commit and reference that immutable tag in
+   the deployment override.
+5. Verify the OIDC start redirect, callback, exact Jellyfin mapping, owner
+   protection, logout, and retained local migration login in a browser.
+
+The operational deployment and rollback procedure is kept in the
+`fudligagg-lab` repository so this source repository never contains live
+credentials.
