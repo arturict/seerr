@@ -6,6 +6,7 @@ import { UserType } from '@server/constants/user';
 import { getRepository } from '@server/datasource';
 import { User } from '@server/entity/User';
 import { startJobs } from '@server/job/schedule';
+import { parseOidcIdentity, selectJellyfinUser } from '@server/lib/oidc';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -17,10 +18,164 @@ import { getHostname } from '@server/utils/getHostname';
 import axios from 'axios';
 import { Router } from 'express';
 import net from 'net';
+import { Issuer, generators, type Client } from 'openid-client';
 import validator from 'validator';
 import { z } from 'zod';
 
 const authRoutes = Router();
+
+let oidcClientPromise: Promise<Client> | undefined;
+
+function oidcConfigured(): boolean {
+  return Boolean(
+    process.env.OIDC_ISSUER &&
+    process.env.OIDC_CLIENT_ID &&
+    process.env.OIDC_CLIENT_SECRET &&
+    process.env.OIDC_REDIRECT_URI
+  );
+}
+
+async function getOidcClient(): Promise<Client> {
+  if (!oidcConfigured()) {
+    throw new Error('OIDC is not configured');
+  }
+  if (!oidcClientPromise) {
+    oidcClientPromise = Issuer.discover(process.env.OIDC_ISSUER ?? '').then(
+      (issuer) =>
+        new issuer.Client({
+          client_id: process.env.OIDC_CLIENT_ID ?? '',
+          client_secret: process.env.OIDC_CLIENT_SECRET ?? '',
+          redirect_uris: [process.env.OIDC_REDIRECT_URI ?? ''],
+          response_types: ['code'],
+        })
+    );
+  }
+  return oidcClientPromise;
+}
+
+authRoutes.get('/oidc/start', async (req, res) => {
+  if (!oidcConfigured() || !req.session) {
+    return res.status(404).json({ error: 'OIDC login is not configured' });
+  }
+  const client = await getOidcClient();
+  req.session.oidcState = generators.state();
+  req.session.oidcNonce = generators.nonce();
+  req.session.oidcCodeVerifier = generators.codeVerifier();
+  const codeChallenge = generators.codeChallenge(req.session.oidcCodeVerifier);
+  return res.redirect(
+    client.authorizationUrl({
+      scope: 'openid profile email',
+      state: req.session.oidcState,
+      nonce: req.session.oidcNonce,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+    })
+  );
+});
+
+authRoutes.get('/oidc/callback', async (req, res) => {
+  const loginFailure = (reason: string) =>
+    res.redirect(`/login?oidc_error=${encodeURIComponent(reason)}`);
+  if (!oidcConfigured() || !req.session?.oidcState) {
+    return loginFailure('session');
+  }
+  try {
+    const client = await getOidcClient();
+    const tokenSet = await client.callback(
+      process.env.OIDC_REDIRECT_URI ?? '',
+      client.callbackParams(req),
+      {
+        state: req.session.oidcState,
+        nonce: req.session.oidcNonce,
+        code_verifier: req.session.oidcCodeVerifier,
+      }
+    );
+    const claims = tokenSet.claims() as Record<string, unknown>;
+    const requiredGroup = process.env.OIDC_REQUIRED_GROUP || 'FudliCraft Users';
+    const identity = parseOidcIdentity(claims, requiredGroup);
+    if (!identity) {
+      return loginFailure('subscription');
+    }
+    const { subject, email } = identity;
+
+    const userRepository = getRepository(User);
+    let user = await userRepository
+      .createQueryBuilder('user')
+      .where('user.oidcSubject = :subject', { subject })
+      .orWhere('LOWER(user.email) = :email', { email })
+      .getOne();
+    if (user?.id === 1) {
+      logger.warn('Refused to link the protected Seerr owner through OIDC', {
+        label: 'Auth',
+        userId: user.id,
+      });
+      return loginFailure('protected_owner');
+    }
+    if (user?.oidcSubject && user.oidcSubject !== subject) {
+      return loginFailure('identity_conflict');
+    }
+
+    const settings = getSettings();
+    const jellyfinClient = new JellyfinAPI(
+      getHostname(),
+      settings.jellyfin.apiKey,
+      'BOT_seerr'
+    );
+    const jellyfinUsers = (await jellyfinClient.getUsers()).users;
+    const jellyfinUser = selectJellyfinUser(
+      jellyfinUsers,
+      identity,
+      user?.jellyfinUserId
+    );
+    if (!jellyfinUser) {
+      logger.warn(
+        'OIDC identity did not resolve to exactly one Jellyfin user',
+        {
+          label: 'Auth',
+          email,
+        }
+      );
+      return loginFailure('jellyfin_mapping');
+    }
+    if (user?.jellyfinUserId && user.jellyfinUserId !== jellyfinUser.Id) {
+      return loginFailure('identity_conflict');
+    }
+
+    if (!user) {
+      user = new User({
+        email,
+        username: identity.name,
+        jellyfinUsername: jellyfinUser.Name,
+        jellyfinUserId: jellyfinUser.Id,
+        jellyfinDeviceId: Buffer.from(
+          `BOT_seerr_${jellyfinUser.Name}`
+        ).toString('base64'),
+        permissions: settings.main.defaultPermissions,
+        userType: UserType.JELLYFIN,
+      });
+    } else {
+      user.email = email;
+      user.jellyfinUsername = jellyfinUser.Name;
+      user.jellyfinUserId = jellyfinUser.Id;
+      user.userType = UserType.JELLYFIN;
+    }
+    user.oidcSubject = subject;
+    user.avatar = getUserAvatarUrl(user);
+    await userRepository.save(user);
+    req.session.userId = user.id;
+    delete req.session.oidcState;
+    delete req.session.oidcNonce;
+    delete req.session.oidcCodeVerifier;
+    return res.redirect('/');
+  } catch (error) {
+    logger.error('OIDC authentication failed', {
+      label: 'Auth',
+      errorMessage: error.message,
+      ip: req.ip,
+    });
+    return loginFailure('callback');
+  }
+});
 
 export const quickConnectSecret = z.object({
   secret: z

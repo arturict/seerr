@@ -197,6 +197,22 @@ const Login = () => {
               </div>
             </Transition>
             <div className="px-10 py-8">
+              <Button
+                as="a"
+                href="/api/v1/auth/oidc/start"
+                buttonType="primary"
+                className="mb-5 w-full"
+                data-testid="fudlihub-login-button"
+              >
+                Mit FudliHub anmelden
+              </Button>
+              <div className="mb-5 flex items-center">
+                <div className="flex-grow border-t border-gray-600" />
+                <span className="mx-2 flex-shrink text-xs text-gray-400">
+                  Lokaler Übergangs-Login
+                </span>
+                <div className="flex-grow border-t border-gray-600" />
+              </div>
               <SwitchTransition mode="out-in">
                 <CSSTransition
                   key={mediaServerLogin ? 'ms' : 'local'}
