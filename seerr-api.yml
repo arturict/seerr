@@ -250,6 +250,9 @@ components:
         enableSpecialEpisodes:
           type: boolean
           example: false
+        versionCheck:
+          type: boolean
+          example: false
     NetworkSettings:
       type: object
       properties:
@@ -2151,10 +2154,18 @@ paths:
   /status:
     get:
       summary: Get Seerr status
-      description: Returns the current Seerr status in a JSON object.
+      description: Returns the current Seerr status in a JSON object. updateAvailable and commitsBehind are omitted when checkUpdateAvailable is false.
       security: []
       tags:
         - public
+      parameters:
+        - in: query
+          name: checkUpdateAvailable
+          description: If false, updateAvailable and commitsBehind will be omitted from the response. Defaults to the versionCheck setting.
+          required: false
+          example: false
+          schema:
+            type: boolean
       responses:
         '200':
           description: Returned status
@@ -3998,6 +4009,49 @@ paths:
               required:
                 - username
                 - password
+  /auth/oidc/start:
+    get:
+      summary: Start the configured OpenID Connect login
+      description: Creates a state, nonce and PKCE verifier in the session and redirects to the configured identity provider.
+      security: []
+      tags:
+        - auth
+      responses:
+        '302':
+          description: Redirect to the identity provider
+        '404':
+          description: OIDC is not configured
+  /auth/oidc/callback:
+    get:
+      summary: Complete the configured OpenID Connect login
+      description: Validates the authorization response and links the exact Jellyfin-backed identity.
+      security: []
+      tags:
+        - auth
+      parameters:
+        - in: query
+          name: code
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: state
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: error
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: error_description
+          required: false
+          schema:
+            type: string
+      responses:
+        '302':
+          description: Redirect to Seerr after success or to login with a bounded error code
   /auth/jellyfin/quickconnect/initiate:
     post:
       summary: Initiate Jellyfin Quick Connect

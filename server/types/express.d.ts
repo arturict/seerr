@@ -3,6 +3,14 @@ import type { User } from '@server/entity/User';
 import type { NextFunction, Request, Response } from 'express';
 import 'express-session';
 
+declare module 'express-session' {
+  interface SessionData {
+    oidcState?: string;
+    oidcNonce?: string;
+    oidcCodeVerifier?: string;
+  }
+}
+
 declare global {
   namespace Express {
     export interface Request {

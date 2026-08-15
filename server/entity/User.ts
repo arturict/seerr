@@ -71,6 +71,9 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   public jellyfinUsername?: string | null;
 
+  @Column({ type: 'varchar', nullable: true, unique: true })
+  public oidcSubject?: string | null;
+
   @Column({ nullable: true })
   public username?: string;
 

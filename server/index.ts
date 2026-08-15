@@ -211,7 +211,10 @@ app
         cookie: {
           maxAge: 1000 * 60 * 60 * 24 * 30,
           httpOnly: true,
-          sameSite: settings.network.csrfProtection ? 'strict' : 'lax',
+          // OIDC returns from a different site. Lax still blocks cross-site
+          // subrequests while allowing the top-level authorization callback;
+          // state, nonce and PKCE bind that callback to this session.
+          sameSite: 'lax',
           secure: 'auto',
         },
         store: new TypeormStore({
@@ -267,19 +270,27 @@ app
 
     const port = Number(process.env.PORT) || 5055;
     const host = process.env.HOST;
+    let httpServer;
     if (host) {
-      server.listen(port, host, () => {
+      httpServer = server.listen(port, host, () => {
         logger.info(`Server ready on ${host} port ${port}`, {
           label: 'Server',
         });
       });
     } else {
-      server.listen(port, () => {
+      httpServer = server.listen(port, () => {
         logger.info(`Server ready on port ${port}`, {
           label: 'Server',
         });
       });
     }
+    httpServer.on('error', (err) => {
+      logger.error('Failed to start server', {
+        label: 'Server',
+        message: err.message,
+      });
+      process.exit(1);
+    });
   })
   .catch((err) => {
     logger.error(err.stack);
